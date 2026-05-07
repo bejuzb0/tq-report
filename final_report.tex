@@ -493,21 +493,9 @@ embeddings can protect the modality gap more directly.
 %-----------------------------------------------------------------------
 \paragraph{Artifacts.}
 \begin{itemize}[itemsep=0pt]
-  \item \textbf{Code repository:} \url{https://github.com/QUASARS06/turboquant-clip}
-  \item \textbf{Embedding notebook (Colab):} \texttt{PASTE\_COLAB\_LINK\_HERE}
-  \item \textbf{Results/figures:} \texttt{PASTE\_RESULTS\_LINK\_HERE}
+  \item \textbf{Code repository (V1):} \url{https://github.com/QUASARS06/turboquant-clip}
+  \item \textbf{Code repository (V2):} \url{https://github.com/bejuzb0/turboclip-quantization}
 \end{itemize}
-
-\paragraph{Reproducibility.}
-The full experiment can be reproduced with:
-\begin{verbatim}
-python -m src.embed encode --out-dir data
-python -m src.embed finalize --out-dir data
-python -m src.eval.experiment --data-dir data --out-dir results \
-    --seeds 0,1,2,3,4 --max-queries 1000
-python -m src.analysis.plots --results-dir results
-python -m src.analysis.geometry --data-dir data --out-dir results
-\end{verbatim}
 
 %-----------------------------------------------------------------------
 \bibliographystyle{plain}
@@ -581,10 +569,14 @@ Blaizzy.
 \section{Use of LLM Assistance}
 \label{app:llm}
 
-This appendix contains the prompts and key responses used to assist with implementation design,
-debugging, and report drafting. All final code and experimental conclusions were independently verified
-through local tests and rerun experiments on our dataset.
 
-\textit{[Prompts and responses to be filled in manually by team members.]}
+\begin{enumerate}[leftmargin=*, itemsep=1em]
+  \item \textbf{Prompt:} Can you give me a brief but complete summary of the key implementation details for QJL, PolarQuant, and TurboQuant? For each method, just cover the core algorithmic idea, what makes it work.
+
+  \item \textbf{Prompt:} Analyze the code present in the two folders, For each of QJL, PolarQuant, and TurboQuant, I have two implementations, a V1 and a V2. What are the key differences between them, write a brief summary explaining the difference and improvements while using V2?
+
+  \item \textbf{Prompt:} Here are links to a few community implementations of TurboQuant: tonbistudio/turboquant-pytorch, Memoriant's DGX Spark KV-cache benchmark, the llama.cpp discussion, and the MLX-VLM reference. Go through each one and tell me what they are doing differently from the original paper, are they changing the projection or the residual stage, or something else? And does any of it apply to our CLIP retrieval setting?
+
+\end{enumerate}
 
 \end{document}
