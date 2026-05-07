@@ -491,13 +491,6 @@ production-speed retrieval, and explore whether allocating different bit budgets
 embeddings can protect the modality gap more directly.
 
 %-----------------------------------------------------------------------
-\paragraph{Artifacts.}
-\begin{itemize}[itemsep=0pt]
-  \item \textbf{Code repository (V1):} \url{https://github.com/QUASARS06/turboquant-clip}
-  \item \textbf{Code repository (V2):} \url{https://github.com/bejuzb0/turboclip-quantization}
-\end{itemize}
-
-%-----------------------------------------------------------------------
 \bibliographystyle{plain}
 \begin{thebibliography}{99}
 
@@ -575,7 +568,7 @@ Blaizzy.
 
   \item \textbf{Prompt:} Analyze the code present in the two folders, For each of QJL, PolarQuant, and TurboQuant, I have two implementations, a V1 and a V2. What are the key differences between them, write a brief summary explaining the difference and improvements while using V2?
 
-  \item \textbf{Prompt:} Here are links to a few community implementations of TurboQuant: tonbistudio/turboquant-pytorch, Memoriant's DGX Spark KV-cache benchmark, the llama.cpp discussion, and the MLX-VLM reference. Go through each one and tell me what they are doing differently from the original paper, are they changing the projection or the residual stage, or something else? And does any of it apply to our CLIP retrieval setting?
+  \item \textbf{Prompt:} Here are links to a few implementations of TurboQuant: tonbistudio/turboquant-pytorch, Memoriant's DGX Spark KV-cache benchmark, the llama.cpp discussion, and the MLX-VLM reference. Go through each one and tell me what they are doing differently from the original paper, are they changing the projection or the residual stage, or something else? And does any of it apply to our CLIP retrieval setting?
 
 \end{enumerate}
 
