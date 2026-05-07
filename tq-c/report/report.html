@@ -1,0 +1,417 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<title>TurboQuant on CLIP — CS 639 Report</title>
+<style>
+@page { size: letter; margin: 0.9in 0.9in 1.0in 0.9in; }
+body { font-family: Helvetica, Arial, sans-serif; font-size: 10.5pt;
+       line-height: 1.35; color: #1a1a1a; }
+h1 { font-size: 17pt; margin-top: 18pt; margin-bottom: 6pt; }
+h2 { font-size: 13pt; margin-top: 14pt; margin-bottom: 4pt; }
+h3 { font-size: 11.5pt; margin-top: 10pt; margin-bottom: 3pt; }
+p  { margin: 5pt 0; text-align: justify; }
+table { border-collapse: collapse; margin: 8pt 0; font-size: 9.5pt; width: 100%; }
+th, td { border: 1px solid #888; padding: 3pt 6pt; }
+th { background: #eee; }
+img { max-width: 100%; }
+figcaption, .caption { font-size: 9pt; color: #555; font-style: italic;
+                      margin-top: 2pt; }
+code, pre { font-family: Menlo, Monaco, monospace; font-size: 9pt; }
+pre { background: #f4f4f4; padding: 6pt; border-radius: 3pt; white-space: pre-wrap; }
+</style>
+</head><body><h1 id="abstract">Abstract</h1>
+<p>We evaluate four post-training embedding compressors — 1-bit QJL,
+PolarQuant, TurboQuant, and FAISS product quantization (PQ) — on CLIP
+ViT-B/32 embeddings of Flickr30k, across four retrieval tasks
+(text→image, image→text, text→text, image→image) and bit budgets from 1
+to 8 bits per dimension. Two findings stand out. First,
+<strong>cross-modal retrieval degrades dramatically faster than
+same-modal retrieval</strong> under aggressive compression: at 1
+bit/dim, image→image Recall@10 is preserved within 11% of the
+uncompressed baseline, while text→image recall collapses by 69%. Second,
+<strong>TurboQuant — a polar-plus-QJL-residual hybrid designed for LLM
+KV caches — does not transfer effectively to CLIP</strong>,
+underperforming both of its component methods at matched bit budgets;
+PolarQuant and FAISS-PQ are the strongest methods in the 2–4 bit regime.
+These results suggest that the modality-gap structure of CLIP embeddings
+makes them particularly sensitive to aggressive quantization on
+cross-modal tasks, and that compressors tuned for Gaussian KV-cache
+distributions do not automatically inherit their performance on
+vision-language representations.</p>
+<h1 id="introduction">1. Introduction</h1>
+<p>CLIP embeddings are now a default retrieval backbone for multimodal
+pipelines, and their vector databases are routinely quantized to keep
+memory and latency in check. The compression techniques used in practice
+— from FAISS PQ to random-projection sketches — were mostly developed
+and benchmarked on <em>unimodal</em> corpora. Recent work on quantizing
+Transformer KV caches has produced a new family of analytic compressors
+(QJL, PolarQuant, TurboQuant) with strong theoretical guarantees. An
+open question is whether these methods transfer to CLIP-style multimodal
+embeddings, where the two modalities occupy distinct cones separated by
+a well-documented “modality gap.”</p>
+<p><strong>Hypothesis.</strong> We tested two claims:</p>
+<ul>
+<li><strong>H1 (Cross-modal fragility):</strong> Cross-modal retrieval
+tasks (text↔︎image) degrade faster under compression than same-modal
+tasks (text↔︎text, image↔︎image), because small bit-level perturbations of
+the embedding move a query across the modality gap.</li>
+<li><strong>H2 (TurboQuant transfer):</strong> TurboQuant’s
+polar-coordinate-plus-QJL-residual construction, which is
+near-state-of-the-art on KV caches, matches or beats its component
+methods on CLIP embeddings at matched bit budgets.</li>
+</ul>
+<p>H1 is <strong>strongly confirmed</strong>. H2 is
+<strong>rejected</strong> in our setup — TurboQuant consistently
+underperforms both QJL and PolarQuant at 2–4 bits/dim on CLIP.</p>
+<h1 id="setup">2. Setup</h1>
+<p><strong>Dataset.</strong> Flickr30k (nlphuji/flickr30k), 31,014
+images and 155,070 captions (5 per image). Loaded from the Hugging Face
+auto-converted parquet branch.</p>
+<p><strong>Embeddings.</strong> CLIP ViT-B/32
+(openai/clip-vit-base-patch32), 512-dimensional, L2-normalized. Image
+and text embeddings precomputed once on a Colab T4 GPU; all downstream
+compression and retrieval runs on CPU.</p>
+<p><strong>Compressors.</strong></p>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Method</th>
+<th>Description</th>
+<th>Bits tested</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Uncompressed</td>
+<td>float32 reference</td>
+<td>32</td>
+</tr>
+<tr>
+<td>QJL</td>
+<td>1-bit sign sketch of a random Gaussian projection, asymmetric IP
+estimator</td>
+<td>1, 2, 3, 4, 8</td>
+</tr>
+<tr>
+<td>PolarQuant</td>
+<td>Recursive polar-coordinate transform with per-level Lloyd-Max
+codebooks</td>
+<td>1, 2, 3, 4</td>
+</tr>
+<tr>
+<td>TurboQuant</td>
+<td>PolarQuant at <code>b-1</code> angle bits + 1-bit QJL on the
+residual</td>
+<td>1, 2, 3, 4</td>
+</tr>
+<tr>
+<td>FAISS-PQ</td>
+<td>Product quantization via FAISS <code>IndexPQ</code> (8-dim
+subspaces)</td>
+<td>1, 2, 4, 8</td>
+</tr>
+</tbody>
+</table>
+<p>For all methods we use asymmetric inner-product estimation: the query
+stays at full precision and only the database vectors are
+compressed.</p>
+<p><strong>Retrieval tasks.</strong> Four tasks evaluated with
+Recall@{1, 5, 10} over 1,000 randomly sampled queries per task:</p>
+<ul>
+<li><strong>T1</strong> text→image: caption queries the image
+database.</li>
+<li><strong>T2</strong> image→text: image queries the caption
+database.</li>
+<li><strong>T3</strong> text→text: caption queries the caption database
+(ground truth: the other 4 captions of the same image).</li>
+<li><strong>T4</strong> image→image: image queries the image database
+(ground truth: the image itself, trivially easy with float32).</li>
+</ul>
+<p>T1 and T2 are cross-modal; T3 and T4 are same-modal.</p>
+<p><strong>Seeds.</strong> Each (method, bits) cell is run with 5 random
+seeds controlling the projection matrix / codebook initialization; we
+report the mean across seeds. Standard deviations across seeds are
+visualized as error bars in the figures.</p>
+<h1 id="main-results">3. Main results</h1>
+<figure>
+<img src="/Users/chiragjain/Desktop/UWM_Courses/CS_639/Project/turboquant-clip/results/figures/fig_cross_vs_same.png"
+alt="Recall@10 vs bits/dim, split by cross-modal vs same-modal tasks. Error bars are standard deviation across 5 seeds." />
+<figcaption aria-hidden="true">Recall@10 vs bits/dim, split by
+cross-modal vs same-modal tasks. Error bars are standard deviation
+across 5 seeds.</figcaption>
+</figure>
+<p>Table 1 reports Recall@10 averaged across seeds for all four tasks at
+representative bit-widths.</p>
+<p><strong>Table 1.</strong> Recall@10 (mean over 5 seeds, 1000 queries
+per task). Best compressed method per column shown in
+<strong>bold</strong>.</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th style="text-align: right;">Bits</th>
+<th style="text-align: right;">T1 txt→img</th>
+<th style="text-align: right;">T2 img→txt</th>
+<th style="text-align: right;">T3 txt→txt</th>
+<th style="text-align: right;">T4 img→img</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Uncompressed</td>
+<td style="text-align: right;">32</td>
+<td style="text-align: right;">0.498</td>
+<td style="text-align: right;">0.741</td>
+<td style="text-align: right;">0.528</td>
+<td style="text-align: right;">1.000</td>
+</tr>
+<tr>
+<td>FAISS-PQ</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;"><strong>0.337</strong></td>
+<td style="text-align: right;"><strong>0.488</strong></td>
+<td style="text-align: right;">0.407</td>
+<td style="text-align: right;">0.851</td>
+</tr>
+<tr>
+<td>QJL</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0.154</td>
+<td style="text-align: right;">0.255</td>
+<td style="text-align: right;">0.493</td>
+<td style="text-align: right;"><strong>0.889</strong></td>
+</tr>
+<tr>
+<td>PolarQuant</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0.131</td>
+<td style="text-align: right;">0.221</td>
+<td style="text-align: right;">0.481</td>
+<td style="text-align: right;">0.841</td>
+</tr>
+<tr>
+<td>TurboQuant</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0.154</td>
+<td style="text-align: right;">0.255</td>
+<td style="text-align: right;">0.493</td>
+<td style="text-align: right;">0.889</td>
+</tr>
+<tr>
+<td>FAISS-PQ</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;"><strong>0.468</strong></td>
+<td style="text-align: right;"><strong>0.673</strong></td>
+<td style="text-align: right;">0.499</td>
+<td style="text-align: right;">0.971</td>
+</tr>
+<tr>
+<td>QJL</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">0.248</td>
+<td style="text-align: right;">0.404</td>
+<td style="text-align: right;">0.510</td>
+<td style="text-align: right;">0.958</td>
+</tr>
+<tr>
+<td>PolarQuant</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">0.349</td>
+<td style="text-align: right;">0.548</td>
+<td style="text-align: right;"><strong>0.517</strong></td>
+<td style="text-align: right;"><strong>0.984</strong></td>
+</tr>
+<tr>
+<td>TurboQuant</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">0.157</td>
+<td style="text-align: right;">0.263</td>
+<td style="text-align: right;">0.442</td>
+<td style="text-align: right;">0.686</td>
+</tr>
+<tr>
+<td>FAISS-PQ</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;"><strong>0.493</strong></td>
+<td style="text-align: right;"><strong>0.736</strong></td>
+<td style="text-align: right;">0.525</td>
+<td style="text-align: right;">0.994</td>
+</tr>
+<tr>
+<td>QJL</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">0.350</td>
+<td style="text-align: right;">0.556</td>
+<td style="text-align: right;">0.524</td>
+<td style="text-align: right;">0.989</td>
+</tr>
+<tr>
+<td>PolarQuant</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">0.483</td>
+<td style="text-align: right;">0.729</td>
+<td style="text-align: right;">0.525</td>
+<td style="text-align: right;"><strong>1.000</strong></td>
+</tr>
+<tr>
+<td>TurboQuant</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">0.425</td>
+<td style="text-align: right;">0.660</td>
+<td style="text-align: right;">0.517</td>
+<td style="text-align: right;">0.978</td>
+</tr>
+</tbody>
+</table>
+<h1 id="findings">4. Findings</h1>
+<h3 id="cross-modal-fragility-is-real-and-substantial-h1-confirmed">4.1
+Cross-modal fragility is real and substantial (H1 confirmed)</h3>
+<p>Across every method, T1 and T2 (cross-modal) lose far more recall at
+aggressive compression than T3 and T4 (same-modal). At 1 bit/dim with
+QJL:</p>
+<ul>
+<li>T4 image→image: 0.889 (vs 1.000 uncompressed,
+<strong>−11.1%</strong>).</li>
+<li>T1 text→image: 0.154 (vs 0.498 uncompressed,
+<strong>−69.1%</strong>).</li>
+</ul>
+<p>The same ordering holds for every compressor we tested. This is the
+paper-worthy finding of the study: for CLIP-style embeddings,
+cross-modal retrieval is the load-bearing axis, and it is much more
+sensitive to quantization than unimodal retrieval.</p>
+<h3 id="polarquant-dominates-the-34-bit-regime">4.2 PolarQuant dominates
+the 3–4 bit regime</h3>
+<p>PolarQuant at 4 bits recovers 97% of uncompressed Recall@10 on the
+hardest task (T1, 0.483 vs 0.498), while using 8× less memory (260 vs
+2048 bytes per vector). QJL at the same bit budget recovers only 70%
+(0.350 vs 0.498). FAISS-PQ at 4 bits is slightly stronger than
+PolarQuant on cross-modal (0.493 vs 0.483 on T1) but indistinguishable
+on same-modal.</p>
+<h3 id="faiss-pq-is-the-strongest-very-low-bit-baseline">4.3 FAISS-PQ is
+the strongest very-low-bit baseline</h3>
+<p>At 1 bit/dim, FAISS-PQ’s data-driven codebook beats both
+random-projection and analytic quantization by a large margin. T1 R@10
+at 1 bit: FAISS-PQ 0.337 vs QJL 0.154 vs PolarQuant 0.131 — roughly 2×
+the recall of the analytic methods at the same byte budget. This is
+consistent with the intuition that learned codebooks can exploit the
+non-isotropic structure of CLIP embeddings that analytic methods
+ignore.</p>
+<h3 id="turboquant-does-not-beat-its-components-on-clip-h2-rejected">4.4
+TurboQuant does not beat its components on CLIP (H2 rejected)</h3>
+<p>This is the unexpected result. TurboQuant was designed to combine
+PolarQuant’s magnitude-angle decomposition with QJL’s cheap residual
+refinement. On LLM KV caches it slightly outperforms both. On CLIP we
+see the opposite:</p>
+<ul>
+<li>At 2 bits, TurboQuant T1 = 0.157, while PolarQuant = 0.349 and QJL =
+0.248. TurboQuant is <strong>worse than either component</strong> by
+9–19 points of recall.</li>
+<li>At 2 bits, TurboQuant even loses 30 points on the “easiest” task T4
+image→image (0.686 vs PolarQuant 0.984).</li>
+<li>Only at 4 bits does TurboQuant approach its components’ performance,
+and it still does not exceed them.</li>
+</ul>
+<p>The mechanism is consistent with our parameterization: TurboQuant at
+target <span class="math inline"><em>b</em></span> bits uses <span
+class="math inline"><em>b</em> − 1</span> angle bits plus a 1-bit QJL
+residual. At 2 bits this leaves only 1 angle bit (a 2-entry codebook per
+angle), which is too coarse; the 1-bit QJL residual on a
+now-badly-reconstructed vector cannot compensate. This is a structural
+limitation of the bit allocation rather than a bug in the estimator: at
+4 bits/dim the angle quantizer has 8 levels and TurboQuant’s recall
+rises to within 12% of PolarQuant on T1.</p>
+<p>We note an important caveat: <strong>our compressor implementations
+deviate from the original papers</strong> (see §6). A paper-faithful
+TurboQuant with a theoretically-optimal Beta-distribution angle
+quantizer might perform differently. We treat H2 as provisionally
+rejected under our implementation assumptions.</p>
+<h3
+id="t3-texttext-is-compression-insensitive-and-should-not-be-over-read">4.5
+T3 text→text is compression-insensitive and should not be over-read</h3>
+<p>All methods achieve 0.44–0.53 R@10 on T3 almost regardless of bit
+width, because the uncompressed ceiling is already 0.528. The inherent
+ambiguity of caption-to-caption retrieval (5 captions per image share
+content but are often phrased very differently) floors the task well
+below the other three. The flat shape of the T3 curve reflects task
+difficulty, not compression robustness, and we caution against reading a
+“same-modal text is robust” story into it.</p>
+<h1 id="memory-accuracy-tradeoff">5. Memory / accuracy tradeoff</h1>
+<figure>
+<img src="/Users/chiragjain/Desktop/UWM_Courses/CS_639/Project/turboquant-clip/results/figures/fig_memory_tradeoff.png"
+alt="Mean Recall@10 across all four tasks vs bytes per vector (log scale)." />
+<figcaption aria-hidden="true">Mean Recall@10 across all four tasks vs
+bytes per vector (log scale).</figcaption>
+</figure>
+<p>The tradeoff curve collapses the four tasks onto a single metric.
+FAISS-PQ traces the Pareto frontier at the very low-byte end. PolarQuant
+joins the frontier from ~130 bytes/vec upward and is essentially on top
+of FAISS-PQ by 256 bytes/vec. QJL is strictly dominated by both at every
+byte budget we tested. TurboQuant lags PolarQuant everywhere.</p>
+<h1 id="embedding-geometry">6. Embedding geometry</h1>
+<figure>
+<img src="/Users/chiragjain/Desktop/UWM_Courses/CS_639/Project/turboquant-clip/results/figures/fig_geometry.png"
+alt="Coordinate distributions before and after the random rotation used by PolarQuant/TurboQuant, and the modality-gap cosine." />
+<figcaption aria-hidden="true">Coordinate distributions before and after
+the random rotation used by PolarQuant/TurboQuant, and the modality-gap
+cosine.</figcaption>
+</figure>
+<p>CLIP embedding coordinates are highly non-Gaussian before rotation
+(image kurtosis ≈ 69.4, text kurtosis ≈ 36.7; both heavily skewed). The
+random orthogonal rotation used by PolarQuant / TurboQuant successfully
+“Gaussianizes” the marginals (kurtosis drops to ≈0, skew ≈0), which is
+why those methods work as well as they do despite being designed under
+Gaussian assumptions.</p>
+<p>The modality gap is pronounced: the cosine between mean image
+embedding and mean text embedding is only 0.344, and the gap-vector norm
+is 0.80 — larger than the typical inter-image distance. This is the
+geometric fact behind cross-modal fragility: a small perturbation that
+would not move an image out of the image cone can easily push it across
+the gap and into the text cone, where it now matches the wrong set of
+neighbors.</p>
+<h1 id="limitations">7. Limitations</h1>
+<ul>
+<li><strong>Implementation fidelity.</strong> Our PolarQuant fits a
+per-level Lloyd-Max codebook empirically on CLIP-rotated angles, rather
+than using the closed-form Beta-distribution quantizer from the paper.
+Our TurboQuant reconstructs and adds the residual explicitly rather than
+using a closed-form LUT-based estimator. These deviations may understate
+the true performance of these methods.</li>
+<li><strong>Single backbone.</strong> Only CLIP ViT-B/32 was evaluated.
+Larger CLIP backbones (e.g., ViT-L/14) may have different embedding
+geometries and different sensitivities to compression.</li>
+<li><strong>Query budget.</strong> 1,000 queries per task gives stable
+Recall@10 estimates but limited resolution on Recall@1 and tail
+behavior.</li>
+<li><strong>Bit range.</strong> 8-bit PolarQuant and 8-bit TurboQuant
+were not evaluated due to the quadratic-in-2^bits memory cost of the
+empirical codebook fit; at 4 bits both methods are already near the
+uncompressed ceiling so this is unlikely to change conclusions.</li>
+<li><strong>Dataset scope.</strong> Flickr30k is an in-distribution
+retrieval benchmark. Out-of-distribution retrieval (e.g., product
+search, medical images) may exhibit different compression behavior.</li>
+</ul>
+<h1 id="conclusion">8. Conclusion</h1>
+<p>For CLIP multimodal embeddings on Flickr30k retrieval, our evaluation
+of four post-training compressors supports two clear statements. First,
+cross-modal retrieval is the task where compression hurts most, and
+should be the primary target of any evaluation of embedding compression
+quality. Second, among the methods we tested, FAISS product quantization
+and PolarQuant form the Pareto frontier in the 2–4 bit regime; the
+TurboQuant construction does not provide additional benefit on CLIP in
+our implementation. Practitioners deploying CLIP vector databases at
+aggressive compression ratios should measure cross-modal recall
+specifically, not rely on same-modal benchmarks, and should prefer
+learned or polar-coordinate quantization over 1-bit sign sketching.</p>
+<h1 id="reproducibility">Reproducibility</h1>
+<p>All code and raw CSVs are available at the project repository. The
+full pipeline is:</p>
+<pre><code>python -m src.embed encode --out-dir data     # T4 GPU, once, ~10 min
+python -m src.embed finalize --out-dir data
+python -m src.eval.experiment --data-dir data --out-dir results \
+    --seeds 0,1,2,3,4 --max-queries 1000       # CPU, ~3 h
+python -m src.analysis.plots --results-dir results</code></pre>
+</body></html>

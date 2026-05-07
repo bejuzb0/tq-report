@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# heavy artifacts — regenerable from code
+data/chunks/
+data/*.npy
+data_coco/chunks/
+data_coco/*.npy
+
+results/figures/*.png
+report/*.pdf
+report/*.aux
+report/*.log

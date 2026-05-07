@@ -1,0 +1,2 @@
+method,bits,seed,bytes_per_vector,index_bytes,compress_seconds,query_latency_ms
+uncompressed,32,0,2048.0,63516672,7.08398874849081e-06,0.03329729486722499

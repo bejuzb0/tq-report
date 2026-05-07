@@ -1,0 +1,5 @@
+method,bits,seed,task,recall_at_1,recall_at_5,recall_at_10,n_queries
+uncompressed,32,0,T1_text2image,0.203,0.408,0.505,1000
+uncompressed,32,0,T2_image2text,0.411,0.65,0.739,1000
+uncompressed,32,0,T3_text2text,0.3,0.482,0.545,1000
+uncompressed,32,0,T4_image2image,1.0,1.0,1.0,1000
