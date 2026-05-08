@@ -34,7 +34,7 @@
     akumar323 \and
     cajain \and
     rsingh \and
-    sagarwal \and
+    sagarwal235 \and
     sbarjatya \and
     sdatta9
 }
@@ -104,29 +104,38 @@ in TurboQuant, achieving near-optimal distortion at 2.5--3.5 bits per dimension.
 exclusively on text and language model activation vectors.
 
 \paragraph{Community implementations.}
-Because TurboQuant is a very recent paper (ICLR 2026), open-source implementations and benchmarks are
-still emerging. The \texttt{tonbistudio/turboquant-pytorch}~\cite{tonbistudio2026} project provides a
-from-scratch PyTorch implementation and documents settings where QJL residuals can be delicate,
-particularly in generation workloads. Memoriant's DGX Spark KV-cache benchmark~\cite{memoriant2026}
-and llama.cpp discussions~\cite{ggmlorg2026} note that memory savings alone are insufficient:
-dequantization and attention-time overheads can dominate latency at long context lengths. The
-MLX-VLM project~\cite{mlxvlm2026} contributed a production-oriented TurboQuant reference using
-Subsampled Randomized Hadamard Transform (SRHT) preconditioning in place of plain Gaussian projections.
-These findings are complementary to ours---they study LLM inference while we study CLIP retrieval---but
-they reinforce the same core point: a theoretically appealing quantizer must be evaluated in the
-downstream operation where it will be used. None of these works evaluate cross-modal retrieval tasks.
-Same-modal nearest-neighbor benchmarks cannot reveal whether compression damages the inter-modal
-alignment that text-to-image and image-to-text retrieval depends on, which is exactly the gap this
-work addresses.
+Several open-source projects have implemented TurboQuant since its publication: \texttt{tonbistudio/turboquant-pytorch}~\cite{tonbistudio2026} documents edge cases in QJL residuals, Memoriant's KV-cache benchmark~\cite{memoriant2026} and llama.cpp discussions~\cite{ggmlorg2026} highlight latency overheads at long context lengths, and MLX-VLM~\cite{mlxvlm2026} uses SRHT preconditioning over plain Gaussian projections.
+All of these study LLM inference workloads and evaluate only same-modal nearest-neighbor tasks.
+None measures whether compression preserves cross-modal alignment, which is the gap this work addresses.
+
+Our setting is similar to prior work in that we use the same compressors and the same inner-product retrieval framework. It differs in two critical ways:
+the embedding space is multimodal, and the retrieval tasks are cross-modal. These differences matter because
+existing evaluations use same-modal nearest-neighbor benchmarks that cannot detect whether
+compression damages inter-modal alignment. FAISS-PQ has not been evaluated alongside the analytic compressors under matched conditions or on cross-modal
+tasks. No prior work measures whether the modality gap survives quantization, which is the
+central question we address.
 
 %-----------------------------------------------------------------------
 \section{Methodology}
 
+We compare three analytic compressors against FAISS-PQ (the standard trained baseline) and float32.
+Alternatives such as scalar quantization reduce to special cases of PQ and are not designed for
+inner-product estimation. Retrieval is asymmetric (queries at float32, database compressed), matching
+real deployment. Recall@10 is preferred over Recall@1 for robustness to near-duplicate captions.
+The four-task design (two cross-modal, two same-modal) is the minimal structure to test H1: same-modal
+tasks are controls, and any gap between groups isolates cross-modal fragility.
+
 \subsection{Dataset, Embeddings, and Hardware}
 
 We use the Hugging Face parquet mirror of Flickr30k~\cite{young2014flickr}, containing 31{,}014 images
-and 155{,}070 captions with five captions per image. Images and captions are embedded with frozen CLIP
-ViT-B/32 into 512-dimensional vectors and L2-normalized to unit norm (required by the polar decomposition
+and 155{,}070 captions with five captions per image. Flickr30k provides multi-answer ground truth for
+image$\to$text tasks, and its 31k-image scale is large enough to expose quantization artifacts while
+remaining tractable for fully CPU-resident experiments. Larger web-crawled datasets such as LAION
+would require GPU-scale retrieval infrastructure and introduce noisy paired annotations. We use CLIP ViT-B/32 because it
+is the most widely deployed CLIP variant and its 512-dimensional embeddings are a natural target:
+large enough to stress compressors across multiple bit-widths, small enough to fit the entire
+database in CPU RAM. Images and captions are embedded with frozen CLIP ViT-B/32 into
+512-dimensional vectors and L2-normalized to unit norm (required by the polar decomposition
 in PolarQuant). All embeddings were computed once on a T4 GPU in Google Colab; all compression, retrieval,
 and analysis steps were run on CPU on a MacBook Pro with an M1 Pro chip (16\,GB RAM). This split mirrors
 the intended deployment: embedding inference is GPU-bound and done once, while the indexing and retrieval
