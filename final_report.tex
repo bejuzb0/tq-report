@@ -48,21 +48,21 @@
 \section{Introduction}
 
 CLIP~\cite{radford2021clip} encodes images and text into a shared 512-dimensional embedding space,
-enabling cross-modal retrieval by dot-product similarity. At scale, this creates a real storage problem:
+enabling cross-modal retrieval by dot-product similarity. At scale this creates a real storage problem:
 a billion-image index at float32 precision requires over 2\,TB before any search infrastructure.
-Compressing those embeddings is the obvious fix, but most methods either require expensive training or
+Compressing those embeddings is the natural fix, but most methods either require expensive training or
 sacrifice too much retrieval quality. Three recent analytic compressors, QJL~\cite{zandieh2024qjl},
 PolarQuant~\cite{han2026polarquant}, and TurboQuant~\cite{zandieh2026turboquant}, are appealing
 alternatives: they require no training data, compress near-instantly, and are theoretically near-optimal
 for inner-product estimation. If they hold up on CLIP, databases could be compressed 8--30$\times$ with
 no index rebuild, making large-scale image search practical on commodity hardware.
 
-The catch is that all three were evaluated only on text embeddings or LLM activations. CLIP embeddings
+The problem is that all three were evaluated only on text embeddings or LLM activations. CLIP embeddings
 are geometrically different: image and text vectors occupy systematically offset regions of the unit
 sphere, a phenomenon known as the \textit{modality gap}~\cite{liang2022gap}. Cross-modal retrieval
-depends on this alignment surviving compression intact, and it is not obvious that compressors designed
-for isotropic text-like distributions will preserve it. We implement all three from paper specifications
-and evaluate them on CLIP, making this the first study of the TurboQuant family on multimodal embeddings.
+depends on this alignment surviving compression intact, and compressors designed for isotropic
+text-like distributions may not preserve it. We implement all three from paper specifications and
+evaluate them on CLIP, making this the first study of the TurboQuant family on multimodal embeddings.
 
 \subsection*{Hypotheses}
 \textbf{H1:} Cross-modal tasks (text-to-image, image-to-text) will degrade faster under compression than
@@ -108,16 +108,16 @@ Because TurboQuant is a very recent paper (ICLR 2026), open-source implementatio
 still emerging. The \texttt{tonbistudio/turboquant-pytorch}~\cite{tonbistudio2026} project provides a
 from-scratch PyTorch implementation and documents settings where QJL residuals can be delicate,
 particularly in generation workloads. Memoriant's DGX Spark KV-cache benchmark~\cite{memoriant2026}
-and llama.cpp discussions~\cite{ggmlorg2026} emphasize that memory savings alone are insufficient:
+and llama.cpp discussions~\cite{ggmlorg2026} note that memory savings alone are insufficient:
 dequantization and attention-time overheads can dominate latency at long context lengths. The
 MLX-VLM project~\cite{mlxvlm2026} contributed a production-oriented TurboQuant reference using
 Subsampled Randomized Hadamard Transform (SRHT) preconditioning in place of plain Gaussian projections.
-These findings are complementary to ours. They study LLM inference while we study CLIP retrieval, but
-they reinforce the same core lesson: a theoretically appealing quantizer must be evaluated in the
-downstream operation where it will be used. Crucially, none of these works evaluate cross-modal
-retrieval tasks. Same-modal nearest-neighbor benchmarks cannot reveal whether compression damages the
-inter-modal alignment that text-to-image and image-to-text retrieval depends on, which is exactly the
-gap this work addresses.
+These findings are complementary to ours---they study LLM inference while we study CLIP retrieval---but
+they reinforce the same core point: a theoretically appealing quantizer must be evaluated in the
+downstream operation where it will be used. None of these works evaluate cross-modal retrieval tasks.
+Same-modal nearest-neighbor benchmarks cannot reveal whether compression damages the inter-modal
+alignment that text-to-image and image-to-text retrieval depends on, which is exactly the gap this
+work addresses.
 
 %-----------------------------------------------------------------------
 \section{Methodology}
@@ -145,10 +145,10 @@ We evaluate four tasks using Recall@$k$ for $k \in \{1, 5, 10\}$:
   \item \textbf{T4 image$\to$image (same-modal):} an image queries the image database; the float32 top-1 image neighbor (excluding the query) is the target.
 \end{itemize}
 
-T1 and T2 are cross-modal tasks and serve as the primary stress test. T3 and T4 are same-modal controls.
-We report Recall@10 as the primary metric: it is less noisy than Recall@1 while still sensitive to ranking
-degradation under compression. Queries always remain at full float32 precision; only the database is
-compressed (asymmetric retrieval).
+T1 and T2 are the primary stress test. T3 and T4 serve as same-modal controls.
+We report Recall@10 as the primary metric: it is less noisy than Recall@1 while still sensitive to
+ranking degradation under compression. Queries always remain at full float32 precision; only the database
+is compressed (asymmetric retrieval).
 
 \subsection{Compressors and Implementation}
 
@@ -183,7 +183,8 @@ inner-product estimator is:
     \langle q, x \rangle \approx \sqrt{\tfrac{\pi}{2}} \cdot \frac{1}{m}
     \sum_{i=1}^{m} (\mathrm{SRHT}(q))_i \cdot \mathrm{sign}((\mathrm{SRHT}(x))_i) \cdot \|x\|_2.
 \]
-SRHT whitens CLIP's non-isotropic coordinate distribution so every sign bit is equally informative, unlike a plain Gaussian projection where low-variance dimensions waste bits.
+SRHT whitens CLIP's non-isotropic coordinate distribution so every sign bit is equally informative,
+unlike a plain Gaussian projection where low-variance dimensions waste bits.
 
 \paragraph{PolarQuant.}
 A shared random orthogonal rotation is applied, then the vector is recursively decomposed into polar
@@ -209,7 +210,12 @@ bits per dimension. This gives $M = 64, 128, 256, 512$ for 1, 2, 4, 8\,bits/dim 
 
 \subsection{Bit-Widths, Seeds, and Validation}
 
-We evaluate bit budgets $\{1, 2, 4\}$ for the analytic methods and $\{1, 2, 4, 8\}$ for FAISS-PQ, with float32 as the uncompressed baseline. Each configuration is run over five random seeds (0--4) to account for the randomness in projections, rotations, and codebook initialization; we report seed means with standard deviation as error bars. Before running CLIP experiments, we validated all compressors on synthetic unit vectors, confirming that inner-product correlation with ground truth improves monotonically with bit-width across all methods.
+We evaluate bit budgets $\{1, 2, 4\}$ for the analytic methods and $\{1, 2, 4, 8\}$ for FAISS-PQ, with
+float32 as the uncompressed baseline. Each configuration is run over five random seeds (0--4) to account
+for randomness in projections, rotations, and codebook initialization; we report seed means with standard
+deviation as error bars. Before running CLIP experiments, we validated all compressors on synthetic unit
+vectors, confirming that inner-product correlation with ground truth improves monotonically with
+bit-width across all methods.
 
 %-----------------------------------------------------------------------
 \section{Implementation: From V1 to V2}
@@ -226,7 +232,8 @@ This alone improves R@1 from 0.67 to 0.90 at 1-bit and cuts encoding from $O(md)
 \paragraph{PolarQuant: empirical codebooks $\to$ analytic codebooks.}
 V1 fitted Lloyd-Max codebooks on CLIP data; V2 derives them from theoretical polar angle PDFs
 (data-free) and gives the first recursion level one extra bit since its angles span $[0,2\pi]$
-vs.\ $[0,\pi/2]$ at deeper levels. Cross-modal Recall@10 at 2\,bits improves from 0.349 to 0.406 (T1) and 0.548 to 0.629 (T2).
+vs.\ $[0,\pi/2]$ at deeper levels. Cross-modal Recall@10 at 2\,bits improves from 0.349 to 0.406
+(T1) and 0.548 to 0.629 (T2).
 
 \paragraph{TurboQuant: MSE stage $\to$ PolarQuant stage.}
 V1's TurboQuantMSE stage (Cartesian scalar quantization) is not suited to unit-normalized embeddings;
@@ -386,35 +393,31 @@ Figure~\ref{fig:efficiency} shows compression time versus memory savings.
 
 \paragraph{Embedding geometry.}
 Raw CLIP coordinates are far from Gaussian (image kurtosis $\approx 69$, text $\approx 37$). Random
-orthogonal rotation brings both close to zero kurtosis, which is what validates the theoretical angle
-PDFs used by PolarQuant and TurboQuant. However, rotation preserves all distances and angles, including
-the modality gap, which is why it helps with quantizer design but cannot fix the cross-modal fragility
-problem.
+orthogonal rotation brings both close to zero kurtosis, which validates the theoretical angle PDFs used
+by PolarQuant and TurboQuant. Rotation preserves all distances and angles, including the modality gap,
+which is why it helps with quantizer design but cannot fix the cross-modal fragility problem.
 
 %-----------------------------------------------------------------------
 \section{Discussion}
 
-\paragraph{Why does FAISS-PQ stay on top?}
-It knows the data. At 1--2\,bits, there are so few bits that every single one needs to capture
-dataset-specific structure, and a codebook trained on the actual CLIP distribution does this better
-than any data-oblivious method. The price is a training pass and the need for representative data
-upfront. If you can afford that, FAISS-PQ is the right call.
+FAISS-PQ leads at low bit budgets because it knows the data. At 1--2\,bits there are so few bits that
+every one needs to capture dataset-specific structure, and a codebook trained on the actual CLIP
+distribution does this better than any data-oblivious method. The tradeoff is a training pass and the
+need for representative data upfront. If you can afford that, FAISS-PQ is the right call.
 
-\paragraph{Why does PolarQuant work so well without training?}
-Two things click together. First, random orthogonal rotation brings CLIP's non-Gaussian coordinate
-distribution close to the angle distributions that PolarQuant's codebooks are derived for. Second,
-polar decomposition is naturally suited to unit vectors. Angles and radii are a meaningful
-parameterization for points on the sphere. The analytic codebooks from the paper are not just
-principled; they actually beat our initial empirically fitted ones (V1 $\to$ V2 gain on T1: +16\%),
-which suggests the theoretical priors are better than what you get from fitting to CLIP specifically.
+PolarQuant performs surprisingly well without any training. Two things explain it. Random orthogonal
+rotation brings CLIP's non-Gaussian coordinate distribution close to the angle distributions that
+PolarQuant's codebooks are derived for. On top of that, polar decomposition is naturally suited to unit
+vectors: angles and radii are a meaningful parameterization for points on the sphere. The analytic
+codebooks actually beat our initial empirically fitted ones---V1 to V2 gained +16\% on T1---which
+suggests the theoretical priors are a better match for this data than fitting directly to CLIP.
 
-\paragraph{Why doesn't TurboQuant beat PolarQuant?}
-The short answer is that at moderate bit budgets (2--4\,bits), the 1-bit overhead for QJL costs more
-than the unbiased correction gains. At 4\,bits, PolarQuant already reconstructs most of the signal, so
-the residual that QJL is correcting is tiny, but QJL still spends one full bit per dimension on it, and
-that variance shows up as rank perturbations in cross-modal retrieval. Retrieval is a ranking problem,
-not an MSE problem, and a small unbiased correction that also adds variance can hurt top-$k$ rankings
-even when it improves mean squared error.
+TurboQuant does not beat PolarQuant, and the reason is structural. At moderate bit budgets (2--4\,bits),
+the 1-bit overhead for the QJL residual costs more than the correction gains back. At 4\,bits,
+PolarQuant already reconstructs most of the signal, so the residual QJL is correcting is tiny---but
+QJL still spends one full bit per dimension on it, and that added variance shows up as rank perturbations
+in cross-modal retrieval. Retrieval is a ranking problem, not an MSE problem. A small unbiased
+correction that also adds variance can hurt top-$k$ rankings even when it improves mean squared error.
 
 \paragraph{Practical guidance.}
 Table~\ref{tab:practical} gives a quick reference for choosing a method given a target quality level.
@@ -468,23 +471,22 @@ representations and kernel-level fusion.
 \section{Conclusion}
 
 We evaluated QJL, PolarQuant, TurboQuant, and FAISS-PQ on 512-dimensional CLIP ViT-B/32 embeddings of
-Flickr30k. The central result is that cross-modal retrieval degrades far faster under compression than
-same-modal retrieval by a factor of 10--12$\times$ at 1\,bit/dim. This is not a quirk of any
+Flickr30k. The main finding is that cross-modal retrieval degrades far faster under compression than
+same-modal retrieval---by a factor of 10--12$\times$ at 1\,bit/dim. This is not a quirk of any
 particular compressor; it is a property of CLIP's geometry. The modality gap survives rotation, and
-quantization noise big enough to be negligible within a modality can still cross the inter-modal
-boundary.
+quantization noise that is negligible within a modality can still cross the inter-modal boundary.
 
-Among the compressors: FAISS-PQ and PolarQuant are the strongest at 2--4\,bits. If you cannot afford
-training data or a codebook rebuild when the database changes, PolarQuant is the best option. It
-matches FAISS-PQ at 4\,bits and gets to 80\% cross-modal retention at 2\,bits without seeing a single
+Among the methods we tested, FAISS-PQ and PolarQuant are the strongest at 2--4\,bits. If training data
+or a codebook rebuild when the database changes is not feasible, PolarQuant is the best available option:
+it matches FAISS-PQ at 4\,bits and reaches 80\% cross-modal retention at 2\,bits without seeing a single
 data point. TurboQuant reaches 95\% cross-modal retention at 4\,bits and is fully functional, but its
 1-bit QJL overhead makes it less efficient at lower bit budgets.
 
-Finally, our V1-to-V2 journey shows that getting the algorithm right matters more than tuning. Going
-from the MSE stage to PolarQuant in TurboQuant, and from Gaussian projection to SRHT in QJL, doubled
-cross-modal recall at 2\,bits without any hyperparameter search. Closer implementation fidelity to the
-papers (analytic codebooks, correct angle domains, proper seed splitting) accounted for all of that
-gain.
+The V1-to-V2 iteration was probably the most instructive part of this project. Going from the MSE stage
+to PolarQuant in TurboQuant, and from Gaussian projection to SRHT in QJL, doubled cross-modal recall at
+2\,bits with no hyperparameter search. All of that gain came from closer implementation fidelity to the
+papers---analytic codebooks, correct angle domains, proper seed splitting. Getting the algorithm right
+mattered far more than any tuning we could have done on top of V1.
 
 Future work could test larger CLIP backbones (ViT-L/14, ViT-H/14), add packed bit kernels for
 production-speed retrieval, and explore whether allocating different bit budgets to image versus text
