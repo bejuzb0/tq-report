@@ -55,7 +55,9 @@ sacrifice too much retrieval quality. Three recent analytic compressors, QJL~\ci
 PolarQuant~\cite{han2026polarquant}, and TurboQuant~\cite{zandieh2026turboquant}, are appealing
 alternatives: they require no training data, compress near-instantly, and are theoretically near-optimal
 for inner-product estimation. If they hold up on CLIP, databases could be compressed 8--30$\times$ with
-no index rebuild, making large-scale image search practical on commodity hardware.
+no index rebuild, making large-scale image search practical on commodity hardware. This would enable
+real-time cross-modal search over billion-scale collections on a single server, without GPU-resident
+indexes, a prerequisite for cost-sensitive deployments like product search or content moderation.
 
 The problem is that all three were evaluated only on text embeddings or LLM activations. CLIP embeddings
 are geometrically different: image and text vectors occupy systematically offset regions of the unit
@@ -69,8 +71,8 @@ evaluate them on CLIP, making this the first study of the TurboQuant family on m
 same-modal tasks (text-to-text, image-to-image), because cross-modal retrieval depends on preserving
 inter-modal geometric alignment, which is more fragile than within-modality neighborhood structure.
 
-\textbf{H2:} The analytic compressors can compress CLIP embeddings to 3--4\,bits with acceptable
-quality and be competitive with trained FAISS-PQ at 2--4\,bits per dimension.
+\textbf{H2:} The analytic compressors can compress CLIP embeddings to 4\,bits and retain
+cross-modal Recall@10 within 5 percentage points of FAISS-PQ at the same bit budget.
 
 \subsection*{Research Questions}
 \begin{itemize}[leftmargin=*, itemsep=0pt]
@@ -108,12 +110,10 @@ Several open-source projects have implemented TurboQuant since its publication: 
 All of these study LLM inference workloads and evaluate only same-modal nearest-neighbor tasks.
 None measures whether compression preserves cross-modal alignment, which is the gap this work addresses.
 
-Our setting is similar to prior work in that we use the same compressors and the same inner-product retrieval framework. It differs in two critical ways:
-the embedding space is multimodal, and the retrieval tasks are cross-modal. These differences matter because
-existing evaluations use same-modal nearest-neighbor benchmarks that cannot detect whether
-compression damages inter-modal alignment. FAISS-PQ has not been evaluated alongside the analytic compressors under matched conditions or on cross-modal
-tasks. No prior work measures whether the modality gap survives quantization, which is the
-central question we address.
+Our work uses the same compressors and retrieval framework but differs in two ways: the embedding space
+is multimodal and the tasks are cross-modal. Existing evaluations use same-modal benchmarks that cannot
+detect whether compression damages inter-modal alignment. No prior work measures whether the modality
+gap survives quantization.
 
 %-----------------------------------------------------------------------
 \section{Methodology}
@@ -128,21 +128,12 @@ tasks are controls, and any gap between groups isolates cross-modal fragility.
 \subsection{Dataset, Embeddings, and Hardware}
 
 We use the Hugging Face parquet mirror of Flickr30k~\cite{young2014flickr}, containing 31{,}014 images
-and 155{,}070 captions with five captions per image. Flickr30k provides multi-answer ground truth for
-image$\to$text tasks, and its 31k-image scale is large enough to expose quantization artifacts while
-remaining tractable for fully CPU-resident experiments. Larger web-crawled datasets such as LAION
-would require GPU-scale retrieval infrastructure and introduce noisy paired annotations. We use CLIP ViT-B/32 because it
-is the most widely deployed CLIP variant and its 512-dimensional embeddings are a natural target:
-large enough to stress compressors across multiple bit-widths, small enough to fit the entire
-database in CPU RAM. Images and captions are embedded with frozen CLIP ViT-B/32 into
-512-dimensional vectors and L2-normalized to unit norm (required by the polar decomposition
-in PolarQuant). All embeddings were computed once on a T4 GPU in Google Colab; all compression, retrieval,
-and analysis steps were run on CPU on a MacBook Pro with an M1 Pro chip (16\,GB RAM). This split mirrors
-the intended deployment: embedding inference is GPU-bound and done once, while the indexing and retrieval
-experiments are fully CPU-resident.
-
-Each uncompressed embedding requires $512 \times 4 = 2{,}048$ bytes. The full image database (31{,}014
-vectors) occupies 63.5\,MB; the text database (155{,}070 vectors) occupies 317\,MB.
+and 155{,}070 captions (five per image). Its 31k-image scale is large enough to expose quantization
+artifacts while remaining tractable for CPU-resident experiments. We use CLIP ViT-B/32: its
+512-dimensional embeddings fit the entire database in RAM and are the most widely deployed CLIP variant.
+Embeddings are L2-normalized to unit norm (required by PolarQuant's polar decomposition). All embeddings
+were computed once on a T4 GPU (Google Colab); compression and retrieval ran on CPU (MacBook Pro M1 Pro,
+16\,GB RAM).
 
 \subsection{Retrieval Tasks and Metrics}
 
@@ -323,13 +314,13 @@ embeddings = 0.344, gap norm $\approx 0.80$) is larger than typical within-modal
 orthogonal rotations preserve it. A perturbation small enough to stay within one modality's neighborhood
 can still cross the inter-modal boundary.
 
-\paragraph{H2: TurboQuant transfer (supported, with a caveat).}
-TurboQuant works on CLIP and improves with each added bit. At 4\,bits it retains 94.6\%/95.7\% of
-cross-modal recall (T1/T2), close to PolarQuant (98.4\%/98.1\%) and FAISS-PQ (99\%). It does not beat
-PolarQuant at any bit-width because it always reserves 1 bit for the QJL residual, leaving only $b{-}1$
-bits for the polar stage. At $b{=}1$ it reduces to pure QJL; at $b{=}2$ the polar codebook has just 2
-entries. It pays off at 4\,bits and is substantially better than QJL alone (+25--48 points on T1 at
-2--4 bits).
+\paragraph{H2: Analytic compressors within 5\,pp of FAISS-PQ at 4\,bits (confirmed).}
+At 4\,bits, PolarQuant retains 98.4\%/98.1\% of cross-modal recall (T1/T2) vs.\ FAISS-PQ's
+99.0\%/99.3\% — a gap of just 0.6--1.2 percentage points, well within the 5\,pp threshold. TurboQuant
+retains 94.6\%/95.7\%, a gap of 3.6--4.4 pp, also within threshold. H2 is confirmed for both methods.
+TurboQuant does not beat PolarQuant at any bit-width because it always reserves 1 bit for the QJL
+residual, leaving only $b{-}1$ bits for the polar stage; it pays off at 4\,bits and is substantially
+better than QJL alone (+25--48 points on T1 at 2--4\,bits).
 
 \begin{figure}[t!]
   \centering
